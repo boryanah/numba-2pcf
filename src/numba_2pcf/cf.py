@@ -12,9 +12,9 @@ from . import particle_grid
 __all__ = ['numba_2pcf', 'jackknife']
 
 _fastmath = True
-_parallel = True
+_parallel = True # tuks
 
-@nb.njit(fastmath=_fastmath)
+@nb.njit(fastmath=_fastmath) # tuks
 def _1d_to_3d(i,ngrid):
     '''i is flat index, n1d is grid size'''
     
@@ -54,12 +54,13 @@ def _do_cell_pair(pos1, pos2, Rmax, nbin, Xoff, counts):
             b = int(r*inv_bw)
             counts[b] += 1
 
-@nb.njit(fastmath=_fastmath) # what does fast math do? B.H.
+@nb.njit(fastmath=_fastmath) # what does fast math do? B.H. # tuks
 def _do_cell_pairwise_vel(pos1, pos2, vel1, vel2, Rmax, nbin, Xoff, counts, weight_counts, norm_counts):
     dtype = pos1.dtype
     inv_bw = dtype.type(nbin/Rmax) # is this assuming linear bins starting at zero? B.H.
     Rmax2 = Rmax*Rmax
     two = dtype.type(2.)
+    zero = dtype.type(0.)
     N1,N2 = len(pos1), len(pos2)
     for i in range(N1):
         p1 = pos1[i]
@@ -84,12 +85,13 @@ def _do_cell_pairwise_vel(pos1, pos2, vel1, vel2, Rmax, nbin, Xoff, counts, weig
             
             b = int(r*inv_bw)
             counts[b] += 1
-            
-            p12 = two * (zdiff/r)
-            v1 = vel1[i][2]
-            v2 = vel2[j][2]
-            weight_counts[b] += two * (v1-v2) * p12 # B.H. only z component
-            norm_counts[b] += p12**two
+
+            if r > zero:
+                p12 = two * (zdiff/r)
+                v1 = vel1[i][2]
+                v2 = vel2[j][2]
+                weight_counts[b] += two * (v1-v2) * p12 # B.H. only z component
+                norm_counts[b] += p12**two
 
 @nb.njit(parallel=_parallel,fastmath=_fastmath)
 def _2pcf(psort, offsets, ngrid, box, Rmax, nbin):
@@ -150,7 +152,7 @@ def _2pcf(psort, offsets, ngrid, box, Rmax, nbin):
     return counts
 
 
-@nb.njit(parallel=_parallel,fastmath=_fastmath)
+@nb.njit(parallel=_parallel,fastmath=_fastmath) # tuks
 def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin):
     dtype = psort.dtype
     
