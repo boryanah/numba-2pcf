@@ -12,9 +12,9 @@ from . import particle_grid
 __all__ = ['numba_2pcf', 'jackknife']
 
 _fastmath = True
-_parallel = True # tuks
+_parallel = True
 
-@nb.njit(fastmath=_fastmath) # tuks
+@nb.njit(fastmath=_fastmath)
 def _1d_to_3d(i,ngrid):
     '''i is flat index, n1d is grid size'''
     
@@ -54,7 +54,7 @@ def _do_cell_pair(pos1, pos2, Rmax, nbin, Xoff, counts):
             b = int(r*inv_bw)
             counts[b] += 1
 
-@nb.njit(fastmath=_fastmath) # what does fast math do? B.H. # tuks
+@nb.njit(fastmath=_fastmath) # what does fast math do? B.H.
 def _do_cell_pairwise_vel(pos1, pos2, vel1, vel2, Rmax, nbin, Xoff, counts, weight_counts, norm_counts):
     dtype = pos1.dtype
     inv_bw = dtype.type(nbin/Rmax) # is this assuming linear bins starting at zero? B.H.
@@ -68,14 +68,14 @@ def _do_cell_pairwise_vel(pos1, pos2, vel1, vel2, Rmax, nbin, Xoff, counts, weig
             p2 = pos2[j]
             # Early exit conditions
             # TODO: could exploit cell sorting better
-            zdiff = np.abs(p1[2] - p2[2] + Xoff[2])
-            if zdiff > Rmax:
+            zdiff = (p1[2] - p2[2] + Xoff[2])
+            if np.abs(zdiff) > Rmax:
                 continue
-            ydiff = np.abs(p1[1] - p2[1] + Xoff[1])
-            if ydiff > Rmax:
+            ydiff = (p1[1] - p2[1] + Xoff[1])
+            if np.abs(ydiff) > Rmax:
                 continue
-            xdiff = np.abs(p1[0] - p2[0] + Xoff[0])
-            if xdiff > Rmax:
+            xdiff = (p1[0] - p2[0] + Xoff[0])
+            if np.abs(xdiff) > Rmax:
                 continue
             
             r2 = xdiff**2 + ydiff**2 + zdiff**2
@@ -152,8 +152,8 @@ def _2pcf(psort, offsets, ngrid, box, Rmax, nbin):
     return counts
 
 
-@nb.njit(parallel=_parallel,fastmath=_fastmath) # tuks
-def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin):
+@nb.njit(parallel=_parallel,fastmath=_fastmath)
+def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin, periodic):
     dtype = psort.dtype
     
     ncell = np.prod(ngrid)
@@ -171,6 +171,9 @@ def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin):
     
     # loop over cell pairs
     for cpair in nb.prange(ncell*nneigh):
+        # flag for skipping pair if it requires wrapping (only if periodic=False)
+        skip = False
+        
         t = nb.np.ufunc.parallel._get_thread_id()
 
         c = cpair // nneigh  # 1d primary cell index
@@ -183,7 +186,7 @@ def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin):
         # global neighbor index
         c3d = _1d_to_3d(c,ngrid)
         off3d = _1d_to_3d(off1d,nw)
-        d3d = c3d + off3d - 1
+        d3d = c3d + off3d - 1 # c3d is the global ijk (for 0 to ngrid-1) in 3D space, off3d is local ijk (for 0 to 2) and then -1 centers it
 
         # periodic neighbor index wrap
         Xoff = np.zeros(3, dtype=dtype)
@@ -191,9 +194,13 @@ def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin):
             if d3d[j] >= ngrid[j]:
                 d3d[j] -= ngrid[j]
                 Xoff[j] -= box
+                skip = True
             if d3d[j] < 0:
                 d3d[j] += ngrid[j]
                 Xoff[j] += box
+                skip = True
+        if not periodic and skip: continue
+        
         # 1d neighbor index
         d = d3d[0]*ngrid[1]*ngrid[2] + d3d[1]*ngrid[2] + d3d[2]
 
@@ -319,7 +326,7 @@ def numba_2pcf(pos, box, Rmax, nbin, nthread=-1, n1djack=None, pg_kwargs=None,
     return t
 
 def numba_pairwise_vel(pos, vel, box, Rmax, nbin, nthread=-1, n1djack=None, pg_kwargs=None,
-        corrfunc=False):
+                       corrfunc=False, periodic=False):
     '''
     Compute the 2PCF, and optionally jackknife.
     Assumes a periodic box and autocorrelation.
@@ -379,10 +386,10 @@ def numba_pairwise_vel(pos, vel, box, Rmax, nbin, nthread=-1, n1djack=None, pg_k
         psort, vsort, offsets = particle_grid.pv_grid(pos, vel, ngrid, box, **pg_kwargs)
 
         nb.set_num_threads(nthread)
-        counts, pairwise = _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin)
+        counts, pairwise = _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin, periodic)
     else:
         import Corrfunc.theory.DD
-        res = Corrfunc.theory.DD(1, nthread, edges, *pos.T, boxsize=box, periodic=True)
+        res = Corrfunc.theory.DD(1, nthread, edges, *pos.T, boxsize=box, periodic=periodic)
         counts = res['npairs']
         counts[0] -= len(pos) # what if bin not starting at zero? B.H.
         pairwise = np.zeros_like(counts)
