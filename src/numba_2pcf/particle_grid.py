@@ -118,7 +118,7 @@ def _particle_grid(p, ngrid, L, nthread, sort=False):
     return psort, starts
 
 @nb.njit(parallel=True,fastmath=True)
-def _pv_grid(p, v, ngrid, L, nthread, sort=False):
+def _pv_grid(p, v1d, ngrid, L, nthread, sort=False):
     nb.set_num_threads(nthread)
     
     ncell = np.prod(ngrid)
@@ -163,7 +163,7 @@ def _pv_grid(p, v, ngrid, L, nthread, sort=False):
     #assert (tstarts >= 0).all()
     
     psort = np.empty_like(p)
-    vsort = np.empty_like(v)
+    vsort = np.empty_like(v1d)
     nwritten = np.empty(ncell, dtype=np.int32)
     for t in nb.prange(nthread):
         cstart = tstarts[t]
@@ -176,9 +176,9 @@ def _pv_grid(p, v, ngrid, L, nthread, sort=False):
             ic = icell[i]
             if ic < cstart or ic >= cend:
                 continue
+            vsort[starts[ic] + nwritten[ic]] = v1d[i]
             for j in range(3):
                 psort[starts[ic] + nwritten[ic],j] = p[i,j]
-                vsort[starts[ic] + nwritten[ic],j] = v[i,j]
             nwritten[ic] += 1
             
     #assert (nwritten == occupation).all()
@@ -227,7 +227,7 @@ def particle_grid(p, ngrid, box, nthread=-1, sort_in_cell=False):
     
     return psort, offsets
 
-def pv_grid(p, v, ngrid, box, nthread=-1, sort_in_cell=False):
+def pv_grid(p, v1d, ngrid, box, nthread=-1, sort_in_cell=False):
     '''
     Parameters
     ==========
@@ -251,11 +251,13 @@ def pv_grid(p, v, ngrid, box, nthread=-1, sort_in_cell=False):
     if type(ngrid) is int:
         ngrid = np.array([ngrid]*3)
     ngrid = np.atleast_1d(ngrid)
+
+    assert np.prod(v1d.shape) == len(v1d)
     
     if nthread == -1:
         nthread = nb.get_num_threads()
     #print(f'Using {nthread} threads')
     
-    psort, vsort, offsets = _pv_grid(p, v, ngrid, box, nthread, sort=sort_in_cell)
+    psort, vsort, offsets = _pv_grid(p, v1d, ngrid, box, nthread, sort=sort_in_cell)
     
     return psort, vsort, offsets

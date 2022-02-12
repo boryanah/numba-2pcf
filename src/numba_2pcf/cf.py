@@ -55,7 +55,7 @@ def _do_cell_pair(pos1, pos2, Rmax, nbin, Xoff, counts):
             counts[b] += 1
 
 @nb.njit(fastmath=_fastmath) # what does fast math do? B.H.
-def _do_cell_pairwise_vel(pos1, pos2, vel1, vel2, Rmax, nbin, Xoff, counts, weight_counts, norm_counts):
+def _do_cell_pairwise_vel_box(pos1, pos2, vel1d1, vel1d2, Rmax, nbin, Xoff, counts, weight_counts, norm_counts):
     dtype = pos1.dtype
     inv_bw = dtype.type(nbin/Rmax) # is this assuming linear bins starting at zero? B.H.
     Rmax2 = Rmax*Rmax
@@ -88,9 +88,60 @@ def _do_cell_pairwise_vel(pos1, pos2, vel1, vel2, Rmax, nbin, Xoff, counts, weig
 
             if r > zero:
                 p12 = two * (zdiff/r)
-                v1 = vel1[i][2]
-                v2 = vel2[j][2]
-                weight_counts[b] += two * (v1-v2) * p12 # B.H. only z component
+                v1 = vel1d1[i]
+                v2 = vel1d2[j]
+                weight_counts[b] += two * (v1-v2) * p12
+                norm_counts[b] += p12**two
+
+@nb.njit(fastmath=_fastmath) # what does fast math do? B.H.
+def _do_cell_pairwise_vel_sky(pos1, pos2, vel1d1, vel1d2, Rmax, nbin, Xoff, counts, weight_counts, norm_counts):
+    dtype = pos1.dtype
+    inv_bw = dtype.type(nbin/Rmax) # is this assuming linear bins starting at zero? B.H.
+    Rmax2 = Rmax*Rmax
+    two = dtype.type(2.)
+    zero = dtype.type(0.)
+    N1,N2 = len(pos1), len(pos2)
+    for i in range(N1):
+        p1 = pos1[i]
+        for j in range(N2):
+            p2 = pos2[j]
+            # Early exit conditions
+            # TODO: could exploit cell sorting better
+            zdiff = (p1[2] - p2[2])
+            if np.abs(zdiff) > Rmax:
+                continue
+            ydiff = (p1[1] - p2[1])
+            if np.abs(ydiff) > Rmax:
+                continue
+            xdiff = (p1[0] - p2[0])
+            if np.abs(xdiff) > Rmax:
+                continue
+            
+            r2 = xdiff**2 + ydiff**2 + zdiff**2
+            if r2 > Rmax2:
+                continue
+            r = np.sqrt(r2)
+            
+            b = int(r*inv_bw)
+            counts[b] += 1
+
+            if r > zero:
+                hx, hy, hz = xdiff/r, ydiff/r, zdiff/r
+                r1 = np.sqrt(p1[0]**two+p1[1]**two+p1[2]**two)
+                r2 = np.sqrt(p2[0]**two+p2[1]**two+p2[2]**two)
+                if r1 > zero:
+                    hx1, hy1, hz1 = p1[0]/r1, p1[1]/r1, p1[2]/r1
+                else:
+                    hx1, hy1, hz1 = zero, zero, zero
+                if r2 > zero:
+                    hx2, hy2, hz2 = p2[0]/r2, p2[1]/r2, p2[2]/r2
+                else:
+                    hx2, hy2, hz2 = zero, zero, zero
+                p12 = (hx1+hx2)*hx + (hy1+hy2)*hy + (hz1+hz2)*hz
+
+                v1 = vel1d1[i]
+                v2 = vel1d2[j]
+                weight_counts[b] += two * (v1-v2) * p12
                 norm_counts[b] += p12**two
 
 @nb.njit(parallel=_parallel,fastmath=_fastmath)
@@ -208,15 +259,26 @@ def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin, periodic):
         if nsecondary == 0:
             continue
 
-        _do_cell_pairwise_vel(psort[s[c]:s[c+1]],
-                              psort[s[d]:s[d+1]],
-                              vsort[s[c]:s[c+1]],
-                              vsort[s[d]:s[d+1]],
-                              Rmax, nbin, Xoff,
-                              thread_counts[t],
-                              thread_weight_counts[t],
-                              thread_norm_counts[t],
-        )
+        if periodic:
+            _do_cell_pairwise_vel_box(psort[s[c]:s[c+1]],
+                                      psort[s[d]:s[d+1]],
+                                      vsort[s[c]:s[c+1]],
+                                      vsort[s[d]:s[d+1]],
+                                      Rmax, nbin, Xoff,
+                                      thread_counts[t],
+                                      thread_weight_counts[t],
+                                      thread_norm_counts[t],
+            )
+        else:
+            _do_cell_pairwise_vel_sky(psort[s[c]:s[c+1]],
+                                      psort[s[d]:s[d+1]],
+                                      vsort[s[c]:s[c+1]],
+                                      vsort[s[d]:s[d+1]],
+                                      Rmax, nbin, Xoff,
+                                      thread_counts[t],
+                                      thread_weight_counts[t],
+                                      thread_norm_counts[t],
+            )
     
     counts = thread_counts.sum(axis=0)
     weight_counts = thread_weight_counts.sum(axis=0)
@@ -228,7 +290,7 @@ def _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin, periodic):
     pairwise = np.zeros(nbin, dtype=dtype)
     for i in range(nbin):
         if norm_counts[i] != zero:
-            pairwise[i] = weight_counts[i]/norm_counts[i]
+            pairwise[i] = -weight_counts[i]/norm_counts[i] # agrees with pairwise_momentum in estimator.py
 
     return counts, pairwise
 
@@ -325,7 +387,7 @@ def numba_2pcf(pos, box, Rmax, nbin, nthread=-1, n1djack=None, pg_kwargs=None,
         
     return t
 
-def numba_pairwise_vel(pos, vel, box, Rmax, nbin, nthread=-1, n1djack=None, pg_kwargs=None,
+def numba_pairwise_vel(pos, vel1d, box, Rmax, nbin, nthread=-1, n1djack=None, pg_kwargs=None,
                        corrfunc=False, periodic=False):
     '''
     Compute the 2PCF, and optionally jackknife.
@@ -368,7 +430,10 @@ def numba_pairwise_vel(pos, vel, box, Rmax, nbin, nthread=-1, n1djack=None, pg_k
         pg_kwargs['nthread'] = nthread
     if 'sort_in_cell' not in pg_kwargs:
         pg_kwargs['sort_in_cell'] = True
-    
+
+    # velocity needs to be 1d (e.g. along z or los)
+    assert np.prod(vel1d.shape) == len(vel1d)
+        
     if nthread == -1:
         nthread = nb.get_num_threads()
         
@@ -383,7 +448,7 @@ def numba_pairwise_vel(pos, vel, box, Rmax, nbin, nthread=-1, n1djack=None, pg_k
         ngrid = (ngrid,)*3
         ngrid = np.atleast_1d(ngrid)
         
-        psort, vsort, offsets = particle_grid.pv_grid(pos, vel, ngrid, box, **pg_kwargs)
+        psort, vsort, offsets = particle_grid.pv_grid(pos, vel1d, ngrid, box, **pg_kwargs)
 
         nb.set_num_threads(nthread)
         counts, pairwise = _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin, periodic)
