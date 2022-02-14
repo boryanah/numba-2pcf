@@ -436,7 +436,13 @@ def numba_pairwise_vel(pos, vel1d, box, Rmax, nbin, nthread=-1, n1djack=None, pg
         
     if nthread == -1:
         nthread = nb.get_num_threads()
-        
+
+    if not periodic:
+        # ensure that particles are within [0, box)
+        min_pos = np.min(pos, axis=0)
+        pos -= min_pos
+        box = np.max(pos) # biggest box containing all particles
+
     # coerce inputs to match pos type
     box = pos.dtype.type(box)
     Rmax = pos.dtype.type(Rmax)
@@ -450,6 +456,9 @@ def numba_pairwise_vel(pos, vel1d, box, Rmax, nbin, nthread=-1, n1djack=None, pg
         
         psort, vsort, offsets = particle_grid.pv_grid(pos, vel1d, ngrid, box, **pg_kwargs)
 
+        if not periodic:
+            psort += min_pos
+        
         nb.set_num_threads(nthread)
         counts, pairwise = _pairwise(psort, vsort, offsets, ngrid, box, Rmax, nbin, periodic)
     else:
